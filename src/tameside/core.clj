@@ -10,10 +10,6 @@
 (defn to-nullable-var [s]
   (str "!" (name s)))
 
-#_(def nullable-cols
-  (map (partial str "!")
-       cols))
-
 (defn null-or-s [null-strings s]
   (if (contains? (into #{}
                        null-strings)
@@ -30,7 +26,7 @@
 
 (defn parse-line [s]
   (map (comp numeric-or-s
-             (partial null-or-s ["NA" ""]))
+             (partial null-or-s ["NA" "N/A" ""]))
        (first (csv/parse-csv s))))
 
 (def column-partition-map
@@ -51,12 +47,39 @@
            ((lfs-textline in-file) ?line)
            (parse-line ?line :>> in-vars)))))
 
+(deffilterop not-all-null? [& tuples]
+  (not (every? nil? tuples)))
+
+(def people-involved
+  {:full-time-or-equivalent ["q3_1a" "q3_1b"]
+   :student-or-trainee      ["q3_2a" "q3_2b"]
+   :volunteer               ["q3_3a"]})
+
+(defn add-ignore-null [& xs]
+  (apply +
+         (map (fn [x] (or x 0))
+              xs)))
+
+(def workforce-breakdown-by-region
+  (let [cols (reduce into
+                     ["questionnaire"]
+                     (map people-involved
+                          [:full-time-or-equivalent :student-or-trainee :volunteer]))
+        vs (map to-nullable-var cols)
+        in (tameside-query cols)]
+    (<- [!questionnaire ?all-paid ?all-student ?all-volunteer]
+        (in :>> vs)
+        (not-all-null? :<< vs)
+        (add-ignore-null !q3_1a !q3_1b :> ?paid)
+        (add-ignore-null !q3_2a !q3_2b :> ?student)
+        (add-ignore-null !q3_3a :> ?volunteer)
+        (c/sum ?paid ?student ?volunteer :> ?all-paid ?all-student ?all-volunteer))))
+
+(defmapcatop make-bruce-happy
+  [workforce-types & xs]
+  (partition 2 (interleave workforce-types xs)))
+
 #_(?- (stdout)
-    (c/first-n (tameside-query ["q6_3a_Tameside" "q6_3b_Tameside" "q6_3bf" "q6_3bg" "q6_3a_GM" "q6_3b_GM"])
-               10))
-
-(def q1_9-group
-  ["q1_9a_Bury" "q1_9b_Bolton" "q1_9c_Manchester" "q1_9d_Oldham" "q1_9e_Rochdale" "q1_9f_Salford" "q1_9g_Stockport" "q1_9h_Tameside" "q1_9i_Trafford" "q1_9j_Wigan"])
-
-(def q1_10-group
-  ["q1_10a_Bury" "q1_10b_Bolton" "q1_10c_Manchester" "q1_10d_Oldham" "q1_10e_Rochdale" "q1_10f_Salford" "q1_10g_Stockport" "q1_10h_Tameside" "q1_10i_Trafford" "q1_10j_Wigan"])
+    (<- [?region ?a ?b]
+        (workforce-breakdown-by-region ?region ?all-paid ?all-student ?all-volunteer)
+        (make-bruce-happy ["Paid" "Student" "Volunteer"] ?all-paid ?all-student ?all-volunteer :> ?a ?b)))
